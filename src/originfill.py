@@ -3,7 +3,7 @@ import datetime as dt
 from sklearn.preprocessing import LabelEncoder
 
 # 读取CSV文件
-csv_file_path = '../assets/val.csv'  # 请替换为实际的CSV文件路径
+csv_file_path = '../assets/test_public.csv'  # 请替换为实际的CSV文件路径
 df = pd.read_csv(csv_file_path)
 
 # Step 1: 替换 pub_dero_bankrup 中的缺失值为 0
@@ -29,17 +29,22 @@ for col, mean in mean_values.items():
 columns_to_drop = ['loan_id', 'user_id', 'post_code', 'region', 'title']
 df.drop(columns=columns_to_drop, inplace=True)
 
-# 额外步骤 2: 转换 issue_date 格式
+# 将issue_date转换为datetime对象
 df['issue_date'] = pd.to_datetime(df['issue_date'], format='%Y/%m/%d')
-df['issue_date'] = df['issue_date'].dt.strftime('%Y%m%d')
 
-# 额外步骤 3: 转换 earlies_credit_mon 格式
+# 提取年和月
+df['issue_year'] = df['issue_date'].dt.year
+df['issue_month'] = df['issue_date'].dt.month
+
+# 删除原始的issue_date列
+df.drop(columns=['issue_date'], inplace=True)
+
+# 转换earlies_credit_mon格式的函数
 def convert_earlies_credit_mon(date_str):
     try:
         if '-' in date_str:
             parts = date_str.split('-')
-            if parts[0].isdigit():
-                # 格式为 '92-Feb' 或 '5-Mar'
+            if parts[0].isdigit():  # 格式为 '92-Feb' 或 '5-Mar'
                 year, month = parts
                 month = dt.datetime.strptime(month, '%b').month
                 year = int(year)
@@ -47,8 +52,7 @@ def convert_earlies_credit_mon(date_str):
                     year += 2000
                 else:  # 大于等于20的年份为1900年后的年份
                     year += 1900
-            else:
-                # 格式为 'Jan-83' 或 'Mar-6'
+            else:  # 格式为 'Jan-83' 或 'Mar-6'
                 month, year = parts
                 month = dt.datetime.strptime(month, '%b').month
                 year = int(year)
@@ -56,21 +60,30 @@ def convert_earlies_credit_mon(date_str):
                     year += 2000
                 else:  # 大于等于20的年份为1900年后的年份
                     year += 1900
-            return f'{year:04d}{month:02d}'
+            return year, month
     except Exception as e:
         print(f"Error processing date: {date_str}, Error: {e}")
-    return date_str
+        return None, None  # 在异常情况下返回None
 
-df['earlies_credit_mon'] = df['earlies_credit_mon'].apply(convert_earlies_credit_mon)
+# 应用转换函数并拆分为两个新列
+df['earlies_credit_year'], df['earlies_credit_month'] = zip(*df['earlies_credit_mon'].apply(convert_earlies_credit_mon))
+
+# 删除原始的earlies_credit_mon列
+df.drop(columns=['earlies_credit_mon'], inplace=True)
+
+# 作比值
+
+# 创建新的布尔变量
+#df['early_return_bool'] = df['early_return'] > 0
+# 检查并修改early_return
+#df.loc[(df['early_return_amount'] != 0) & (df['early_return'] == 0), 'early_return'] = 1
+# 计算比值并创建新列
+df['early_return_ratio'] = df['early_return_amount'] / df['early_return']
 
 # 额外步骤 4: 标签编码（Ordinal）和独热编码（Nominal）
 
-# 标签编码有序分类特征（Ordinal）
-label_encoder = LabelEncoder()
-df['class'] = label_encoder.fit_transform(df['class'])
-
 # 独热编码无序分类特征（Nominal）
-df = pd.get_dummies(df, columns=['employer_type', 'industry'])
+df = pd.get_dummies(df, columns=['class', 'employer_type', 'industry'])
 
 # 删除 recircle_u 和 debt_loan_ratio 中含有缺失值的样本
 df.dropna(subset=['recircle_u', 'debt_loan_ratio'], inplace=True)
@@ -80,6 +93,6 @@ print(df.isnull().sum())
 print(df.head())
 
 # 保存处理后的数据
-output_csv_file_path = '../assets/val_processed.csv'
+output_csv_file_path = '../assets/test_processed.csv'
 df.to_csv(output_csv_file_path, index=False)
 print(f"Processed data saved to {output_csv_file_path}")

@@ -1,80 +1,78 @@
 import pandas as pd
-from catboost import CatBoostClassifier
-from sklearn.model_selection import train_test_split
 import numpy as np
+from catboost import CatBoostClassifier, Pool
+from sklearn.model_selection import train_test_split
 
-# 读取public和internet表
-public_csv_path = '../assets/train_built_work_year.csv'
-internet_csv_path = '../assets/train_internet_work_year_filled.csv'
+# Reading public and internet tables
+public_csv_path = '../assets/train_made_work_year.csv'
+internet_csv_path = '../assets/train_internet_made_work_year.csv'
 
 public_df = pd.read_csv(public_csv_path)
 internet_df = pd.read_csv(internet_csv_path)
 
-# 假设target是违约标志列，1代表违约，0代表未违约
+# Update column names
+internet_df.rename(columns={'is_default': 'isDefault'}, inplace=True)
+
+# Define the target column
 target_col = 'isDefault'
 
-# 检查并补齐internet表缺失的表项
+# Fill missing columns in the internet dataframe from the public dataframe
 missing_columns = set(public_df.columns) - set(internet_df.columns)
 for col in missing_columns:
-    public_mean = public_df[col].mean()
-    internet_df[col] = public_mean
+    internet_df[col] = public_df[col].mean()
 
-# 填充internet表中的其他缺失值为public表的均值
+# Remove extra columns from the internet dataframe
+extra_columns = set(internet_df.columns) - set(public_df.columns)
+internet_df.drop(columns=extra_columns, inplace=True)
+
+# Fill other missing values in the internet dataframe with the mean of the public dataframe
 for col in internet_df.columns:
     if internet_df[col].isnull().any():
         internet_df[col].fillna(public_df[col].mean(), inplace=True)
 
-# 分离特征和目标变量
+# Splitting features and the target variable
 X_public = public_df.drop(columns=[target_col])
 y_public = public_df[target_col]
 X_internet = internet_df.drop(columns=[target_col])
+y_internet = internet_df[target_col]
 
-# 训练CatBoost模型
+
+
+# Ensure prediction set and training set have the same feature columns
+columns = [col for col in public_df.columns if col != target_col]
+X_internet = X_internet[columns]
+
+# Training the CatBoost model
 model = CatBoostClassifier(
     iterations=1000,
-    learning_rate=0.1,
-    depth=6,
-    eval_metric='Accuracy',
-    verbose=False
+    learning_rate=0.08,
+    depth=5,
+    eval_metric='AUC',
+    verbose=200,
+    random_seed=42
 )
 
-model.fit(X_public, y_public)
+# Fit model
+model.fit(X_public, y_public, cat_features = [col for col in X_public.columns if 'class_' in col or
+                'employer_type_' in col or 'industry_' in col or 'work_year_' in col]
+)
 
-# 对internet表进行违约概率预测
+# Predicting the default probability
 predictions_proba = model.predict_proba(X_internet)[:, 1]
+print(predictions_proba)
 
-# 打印不同阈值下符合条件的项目数量
-thresholds = np.arange(0.01, 0.101, 0.01)
-
+# Print the number of samples meeting the condition under different thresholds
+thresholds = np.arange(0.01, 0.04, 0.005)
+print(internet_df[target_col].head(10))
 for threshold in thresholds:
-    selected_indices = internet_df[((predictions_proba < threshold) & (internet_df[target_col] == 0)) | ((predictions_proba > 1-threshold) & (internet_df[target_col] == 1))].index
+    selected_indices = internet_df[((predictions_proba < threshold) & (internet_df[target_col] == 0)) |
+                                   ((predictions_proba >= 1 - threshold) & (internet_df[target_col] == 1))].index
     count = len(selected_indices)
-    print(f"Threshold: {threshold:.2f}, Number of non-default samples: {count}")
+    print(f"Threshold: {threshold:.3f}, Number of non-default samples: {count}")
 
-    # 保存选中的行并与原始public表组合
+    # Save selected rows and combine with the original public table
     selected_df = internet_df.loc[selected_indices]
     combined_df = pd.concat([public_df, selected_df])
-    output_csv_path = f'../assets/combined_{threshold:.2f}.csv'
+    output_csv_path = f'../assets/combined_{threshold:.3f}.csv'
     combined_df.to_csv(output_csv_path, index=False)
     print(f'Saved to {output_csv_path}')
-'''
-
-# 示例：使用某个阈值（例如 0.07）来筛选样本
-threshold = 0.07
-selected_indices = internet_df[(predictions_proba < threshold) & (internet_df[target_col] == 0)].index
-
-# 从 internet_df 中筛选出被选中的样本
-selected_internet_df = internet_df.loc[selected_indices]
-
-# 去除选中样本中的 target 列，进行合并
-selected_internet_df = selected_internet_df.assign(target=0)
-
-# 将筛选结果与原始public表合并
-combined_df = pd.concat([public_df, selected_internet_df], ignore_index=True)
-
-# 保存最终的训练集
-output_csv_path = '../assets/combined_train_public_internet.csv'
-combined_df.to_csv(output_csv_path, index=False)
-print(f"Combined dataset saved to {output_csv_path}")
-
-'''
